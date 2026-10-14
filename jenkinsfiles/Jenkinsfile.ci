@@ -1,0 +1,84 @@
+#!/usr/bin/env groovy
+
+// Standard CI pipeline: checkout -> test -> build image -> notify.
+// Demonstrates composing several shared-library steps plus a src/ class.
+
+@Library('demo-jenkins-library') _
+
+import org.kubesphere.Utils
+
+pipeline {
+    agent {
+        kubernetes {
+            yaml '''
+apiVersion: v1
+kind: Pod
+spec:
+  containers:
+  - name: go
+    image: golang:1.22
+    command: ['cat']
+    tty: true
+  - name: docker
+    image: docker:24-dind
+    securityContext:
+      privileged: true
+'''
+        }
+    }
+
+    options {
+        timestamps()
+        timeout(time: 30, unit: 'MINUTES')
+        buildDiscarder(logRotator(numToKeepStr: '20'))
+    }
+
+    environment {
+        IMAGE = 'myorg/demo-app'
+        REGISTRY = 'registry.example.com'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Test') {
+            steps {
+                container('go') {
+                    withBuildEnv(goVersion: '1.22') {
+                        runTests command: 'go test ./...', report: 'reports/junit.xml'
+                    }
+                }
+            }
+        }
+
+        stage('Build Image') {
+            steps {
+                container('docker') {
+                    script {
+                        def tag = Utils.branchToTag(env.BRANCH_NAME ?: 'main')
+                        def fullImage = buildImage(
+                            image: env.IMAGE,
+                            tag: "${tag}-${env.BUILD_NUMBER}",
+                            registry: env.REGISTRY,
+                            push: env.BRANCH_NAME == 'main'
+                        )
+                        echo "Built ${fullImage}"
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        success {
+            notifySlack status: 'SUCCESS', message: "CI passed for ${env.JOB_NAME}"
+        }
+        failure {
+            notifySlack status: 'FAILURE', message: "CI failed for ${env.JOB_NAME}"
+        }
+    }
+}

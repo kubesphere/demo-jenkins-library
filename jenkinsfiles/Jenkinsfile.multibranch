@@ -1,0 +1,72 @@
+#!/usr/bin/env groovy
+
+// Multibranch pipeline: behaviour branches on the branch name.
+// Demonstrates scripted-style branching inside a declarative pipeline.
+
+@Library('demo-jenkins-library') _
+
+import org.kubesphere.Utils
+
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        skipDefaultCheckout()
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+                script {
+                    env.GIT_BRANCH = env.BRANCH_NAME ?: 'main'
+                    env.IMAGE_TAG = Utils.branchToTag(env.GIT_BRANCH)
+                }
+            }
+        }
+
+        stage('Build') {
+            steps {
+                withBuildEnv {
+                    sh 'make build'
+                }
+            }
+        }
+
+        stage('Test') {
+            steps {
+                runTests command: 'make test'
+            }
+        }
+
+        stage('Publish') {
+            when {
+                anyOf {
+                    branch 'main'
+                    expression { Utils.isReleaseBranch(env.GIT_BRANCH) }
+                }
+            }
+            steps {
+                script {
+                    buildImage image: 'myorg/demo-app', tag: env.IMAGE_TAG, push: true
+                }
+            }
+        }
+
+        stage('Deploy to Staging') {
+            when {
+                branch 'main'
+            }
+            steps {
+                deployK8s namespace: 'staging', manifest: 'deploy/app.yaml', deployment: 'demo-app'
+            }
+        }
+    }
+
+    post {
+        always {
+            notifySlack message: "Branch ${env.GIT_BRANCH} build #${env.BUILD_NUMBER}"
+        }
+    }
+}

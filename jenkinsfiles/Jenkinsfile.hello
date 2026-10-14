@@ -1,0 +1,36 @@
+#!/usr/bin/env groovy
+
+// Minimal pipeline: exercises the simplest shared-library step.
+// Good first pipeline to run after wiring up the library.
+
+@Library('demo-jenkins-library') _
+
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        buildDiscarder(logRotator(numToKeepStr: '10'))
+    }
+
+    parameters {
+        string(name: 'NAME', defaultValue: 'KubeSphere', description: 'Who to greet')
+        booleanParam(name: 'LOUD', defaultValue: false, description: 'Shout the greeting')
+    }
+
+    stages {
+        stage('Greet') {
+            steps {
+                script {
+                    sayHello name: params.NAME, loud: params.LOUD
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Pipeline finished with ${currentBuild.currentResult}"
+        }
+    }
+}

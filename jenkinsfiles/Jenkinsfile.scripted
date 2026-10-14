@@ -1,0 +1,45 @@
+#!/usr/bin/env groovy
+
+// Scripted (non-declarative) pipeline: full control flow, try/catch/finally.
+// Demonstrates the same shared-library steps used imperatively.
+
+@Library('demo-jenkins-library') _
+
+import org.kubesphere.Utils
+
+node('linux') {
+    def imageTag = Utils.branchToTag(env.BRANCH_NAME ?: 'main')
+
+    try {
+        stage('Checkout') {
+            checkout scm
+        }
+
+        stage('Build & Test') {
+            withBuildEnv {
+                sh 'make build'
+                runTests command: 'make test'
+            }
+        }
+
+        stage('Build Image') {
+            buildImage image: 'myorg/demo-app', tag: imageTag, push: false
+        }
+
+        stage('Deploy') {
+            if (env.BRANCH_NAME == 'main') {
+                deployK8s namespace: 'staging', manifest: 'deploy/app.yaml', deployment: 'demo-app'
+            } else {
+                echo "Skipping deploy for branch ${env.BRANCH_NAME}"
+            }
+        }
+
+        currentBuild.result = 'SUCCESS'
+    } catch (Exception e) {
+        currentBuild.result = 'FAILURE'
+        echo "Pipeline error: ${e.message}"
+        throw e
+    } finally {
+        notifySlack message: "Scripted build ${env.JOB_NAME} #${env.BUILD_NUMBER}"
+    }
+}

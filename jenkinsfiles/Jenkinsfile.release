@@ -1,0 +1,91 @@
+#!/usr/bin/env groovy
+
+// Release pipeline: version bump -> build -> deploy -> notify.
+// Demonstrates a declarative pipeline with input approval and a src/ class.
+
+@Library('demo-jenkins-library') _
+
+import org.kubesphere.Version
+
+pipeline {
+    agent any
+
+    options {
+        timestamps()
+        disableConcurrentBuilds()
+    }
+
+    parameters {
+        string(name: 'VERSION', defaultValue: '1.0.0', description: 'Base semantic version')
+        choice(name: 'BUMP', choices: ['patch', 'minor', 'major'], description: 'Which part to bump')
+        string(name: 'NAMESPACE', defaultValue: 'demo', description: 'Target namespace')
+    }
+
+    environment {
+        IMAGE = 'myorg/demo-app'
+        REGISTRY = 'registry.example.com'
+    }
+
+    stages {
+        stage('Checkout') {
+            steps {
+                checkout scm
+            }
+        }
+
+        stage('Compute Version') {
+            steps {
+                script {
+                    def base = new Version(params.VERSION)
+                    def next = base.bump(params.BUMP)
+                    env.RELEASE_VERSION = next.toString()
+                    echo "Releasing ${env.RELEASE_VERSION} (from ${base})"
+                }
+            }
+        }
+
+        stage('Build Image') {
+            steps {
+                script {
+                    buildImage(
+                        image: env.IMAGE,
+                        tag: env.RELEASE_VERSION,
+                        registry: env.REGISTRY,
+                        push: true
+                    )
+                }
+            }
+        }
+
+        stage('Approve Deploy') {
+            steps {
+                timeout(time: 1, unit: 'HOURS') {
+                    input message: "Deploy ${env.RELEASE_VERSION} to ${params.NAMESPACE}?", ok: 'Deploy'
+                }
+            }
+        }
+
+        stage('Deploy') {
+            steps {
+                deployK8s(
+                    namespace: params.NAMESPACE,
+                    manifest: 'deploy/app.yaml',
+                    deployment: 'demo-app',
+                    timeout: '5m'
+                )
+            }
+        }
+    }
+
+    post {
+        success {
+            notifySlack status: 'SUCCESS', message: "Released ${env.RELEASE_VERSION}"
+        }
+        failure {
+            notifySlack status: 'FAILURE', message: "Release ${env.RELEASE_VERSION} failed"
+        }
+        aborted {
+            notifySlack status: 'ABORTED', message: "Release ${env.RELEASE_VERSION} aborted"
+        }
+    }
+}
